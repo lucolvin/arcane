@@ -54,6 +54,7 @@ services:
     environment:
       - GIN_MODE=debug
       - ENVIRONMENT=development
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-..}
       - PORT=3552
       - LOG_LEVEL=debug
       - APP_URL=http://localhost:3000

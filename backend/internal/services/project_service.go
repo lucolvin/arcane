@@ -1283,3 +1283,394 @@ func (s *ProjectService) calculateProjectStatus(services []ProjectServiceInfo) m
 	}
 	return models.ProjectStatusUnknown
 }
+
+// BrowseProjectFiles lists files and directories in a project directory.
+func (s *ProjectService) BrowseProjectFiles(ctx context.Context, projectID string, relativePath string) (project.BrowseFilesResponse, error) {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return project.BrowseFilesResponse{}, err
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+		return project.BrowseFilesResponse{}, fmt.Errorf("invalid path: path traversal not allowed")
+	}
+
+	targetPath := filepath.Join(proj.Path, cleanPath)
+
+	if !fs.IsSafeSubdirectory(proj.Path, targetPath) {
+		return project.BrowseFilesResponse{}, fmt.Errorf("invalid path: outside project directory")
+	}
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return project.BrowseFilesResponse{}, fmt.Errorf("path not found: %s", relativePath)
+		}
+		return project.BrowseFilesResponse{}, fmt.Errorf("failed to access path: %w", err)
+	}
+
+	if !info.IsDir() {
+		return project.BrowseFilesResponse{}, fmt.Errorf("path is not a directory")
+	}
+
+	entries, err := os.ReadDir(targetPath)
+	if err != nil {
+		return project.BrowseFilesResponse{}, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var fileEntries []project.FileEntry
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to get file info", "name", entry.Name(), "error", err)
+			continue
+		}
+
+		fileEntry := project.FileEntry{
+			Name:        entry.Name(),
+			Path:        filepath.Join(cleanPath, entry.Name()),
+			IsDirectory: entry.IsDir(),
+			Size:        info.Size(),
+			ModifiedAt:  info.ModTime(),
+			Permissions: fmt.Sprintf("%o", info.Mode().Perm()),
+		}
+		fileEntries = append(fileEntries, fileEntry)
+	}
+
+	return project.BrowseFilesResponse{
+		Entries: fileEntries,
+		Path:    cleanPath,
+	}, nil
+}
+
+// ReadProjectFile reads the content of a file in the project directory.
+func (s *ProjectService) ReadProjectFile(ctx context.Context, projectID string, relativePath string) (project.ReadFileResponse, error) {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return project.ReadFileResponse{}, err
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+		return project.ReadFileResponse{}, fmt.Errorf("invalid path: path traversal not allowed")
+	}
+
+	targetPath := filepath.Join(proj.Path, cleanPath)
+
+	if !fs.IsSafeSubdirectory(proj.Path, targetPath) {
+		return project.ReadFileResponse{}, fmt.Errorf("invalid path: outside project directory")
+	}
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return project.ReadFileResponse{}, fmt.Errorf("file not found: %s", relativePath)
+		}
+		return project.ReadFileResponse{}, fmt.Errorf("failed to access file: %w", err)
+	}
+
+	if info.IsDir() {
+		return project.ReadFileResponse{}, fmt.Errorf("path is a directory, not a file")
+	}
+
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		return project.ReadFileResponse{}, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	return project.ReadFileResponse{
+		Content: string(content),
+		Path:    cleanPath,
+		Size:    info.Size(),
+	}, nil
+}
+
+// WriteProjectFile writes content to a file in the project directory.
+func (s *ProjectService) WriteProjectFile(ctx context.Context, projectID string, relativePath string, content string, createDirs bool) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+		return fmt.Errorf("invalid path: path traversal not allowed")
+	}
+
+	targetPath := filepath.Join(proj.Path, cleanPath)
+
+	if !fs.IsSafeSubdirectory(proj.Path, targetPath) {
+		return fmt.Errorf("invalid path: outside project directory")
+	}
+
+	if createDirs {
+		dir := filepath.Dir(targetPath)
+		if err := os.MkdirAll(dir, common.DirPerm); err != nil {
+			return fmt.Errorf("failed to create directories: %w", err)
+		}
+	}
+
+	if err := os.WriteFile(targetPath, []byte(content), common.FilePerm); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	slog.InfoContext(ctx, "File written", "projectID", projectID, "path", cleanPath, "size", len(content))
+	return nil
+}
+
+// CreateProjectDirectory creates a new directory in the project.
+func (s *ProjectService) CreateProjectDirectory(ctx context.Context, projectID string, relativePath string) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+		return fmt.Errorf("invalid path: path traversal not allowed")
+	}
+
+	targetPath := filepath.Join(proj.Path, cleanPath)
+
+	if !fs.IsSafeSubdirectory(proj.Path, targetPath) {
+		return fmt.Errorf("invalid path: outside project directory")
+	}
+
+	if err := os.MkdirAll(targetPath, common.DirPerm); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	slog.InfoContext(ctx, "Directory created", "projectID", projectID, "path", cleanPath)
+	return nil
+}
+
+// DeleteProjectFile deletes a file or directory in the project.
+func (s *ProjectService) DeleteProjectFile(ctx context.Context, projectID string, relativePath string, recursive bool) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || cleanPath == "." {
+		return fmt.Errorf("invalid path: cannot delete project root or parent directories")
+	}
+
+	protectedFiles := []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+	for _, protected := range protectedFiles {
+		if cleanPath == protected {
+			return fmt.Errorf("cannot delete protected file: %s", protected)
+		}
+	}
+
+	targetPath := filepath.Join(proj.Path, cleanPath)
+
+	if !fs.IsSafeSubdirectory(proj.Path, targetPath) {
+		return fmt.Errorf("invalid path: outside project directory")
+	}
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("path not found: %s", relativePath)
+		}
+		return fmt.Errorf("failed to access path: %w", err)
+	}
+
+	if info.IsDir() && !recursive {
+		entries, err := os.ReadDir(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to read directory: %w", err)
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("directory not empty, use recursive delete")
+		}
+	}
+
+	if info.IsDir() && recursive {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return fmt.Errorf("failed to delete directory: %w", err)
+		}
+	} else {
+		if err := os.Remove(targetPath); err != nil {
+			return fmt.Errorf("failed to delete: %w", err)
+		}
+	}
+
+	slog.InfoContext(ctx, "Path deleted", "projectID", projectID, "path", cleanPath, "recursive", recursive)
+	return nil
+}
+
+// CopyProjectFile copies a file or directory within the project.
+func (s *ProjectService) CopyProjectFile(ctx context.Context, projectID string, sourcePath string, destPath string) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	cleanSource := filepath.Clean(sourcePath)
+	cleanDest := filepath.Clean(destPath)
+
+	if cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
+		return fmt.Errorf("invalid source path: path traversal not allowed")
+	}
+	if cleanDest == ".." || strings.HasPrefix(cleanDest, "../") {
+		return fmt.Errorf("invalid destination path: path traversal not allowed")
+	}
+
+	sourceFullPath := filepath.Join(proj.Path, cleanSource)
+	destFullPath := filepath.Join(proj.Path, cleanDest)
+
+	if !fs.IsSafeSubdirectory(proj.Path, sourceFullPath) {
+		return fmt.Errorf("invalid source path: outside project directory")
+	}
+	if !fs.IsSafeSubdirectory(proj.Path, destFullPath) {
+		return fmt.Errorf("invalid destination path: outside project directory")
+	}
+
+	sourceInfo, err := os.Stat(sourceFullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("source not found: %s", sourcePath)
+		}
+		return fmt.Errorf("failed to access source: %w", err)
+	}
+
+	if _, err := os.Stat(destFullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", destPath)
+	}
+
+	if sourceInfo.IsDir() {
+		if err := copyDir(sourceFullPath, destFullPath); err != nil {
+			return fmt.Errorf("failed to copy directory: %w", err)
+		}
+	} else {
+		destDir := filepath.Dir(destFullPath)
+		if err := os.MkdirAll(destDir, common.DirPerm); err != nil {
+			return fmt.Errorf("failed to create destination directory: %w", err)
+		}
+
+		if err := copyFile(sourceFullPath, destFullPath); err != nil {
+			return fmt.Errorf("failed to copy file: %w", err)
+		}
+	}
+
+	slog.InfoContext(ctx, "Path copied", "projectID", projectID, "source", cleanSource, "destination", cleanDest)
+	return nil
+}
+
+// MoveProjectFile moves/renames a file or directory within the project.
+func (s *ProjectService) MoveProjectFile(ctx context.Context, projectID string, sourcePath string, destPath string) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	cleanSource := filepath.Clean(sourcePath)
+	cleanDest := filepath.Clean(destPath)
+
+	if cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
+		return fmt.Errorf("invalid source path: path traversal not allowed")
+	}
+	if cleanDest == ".." || strings.HasPrefix(cleanDest, "../") {
+		return fmt.Errorf("invalid destination path: path traversal not allowed")
+	}
+
+	protectedFiles := []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+	for _, protected := range protectedFiles {
+		if cleanSource == protected {
+			return fmt.Errorf("cannot move protected file: %s", protected)
+		}
+	}
+
+	sourceFullPath := filepath.Join(proj.Path, cleanSource)
+	destFullPath := filepath.Join(proj.Path, cleanDest)
+
+	if !fs.IsSafeSubdirectory(proj.Path, sourceFullPath) {
+		return fmt.Errorf("invalid source path: outside project directory")
+	}
+	if !fs.IsSafeSubdirectory(proj.Path, destFullPath) {
+		return fmt.Errorf("invalid destination path: outside project directory")
+	}
+
+	if _, err := os.Stat(sourceFullPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("source not found: %s", sourcePath)
+		}
+		return fmt.Errorf("failed to access source: %w", err)
+	}
+
+	if _, err := os.Stat(destFullPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", destPath)
+	}
+
+	destDir := filepath.Dir(destFullPath)
+	if err := os.MkdirAll(destDir, common.DirPerm); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	if err := os.Rename(sourceFullPath, destFullPath); err != nil {
+		return fmt.Errorf("failed to move/rename: %w", err)
+	}
+
+	slog.InfoContext(ctx, "Path moved", "projectID", projectID, "source", cleanSource, "destination", cleanDest)
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	if _, err := io.Copy(destFile, sourceFile); err != nil {
+		return err
+	}
+
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return os.Chmod(dst, sourceInfo.Mode())
+}
+
+func copyDir(src, dst string) error {
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, sourceInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		sourcePath := filepath.Join(src, entry.Name())
+		destPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(sourcePath, destPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(sourcePath, destPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

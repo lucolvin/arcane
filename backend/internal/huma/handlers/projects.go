@@ -156,6 +156,76 @@ type PullProgressEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+type BrowseProjectFilesInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Path          string `query:"path" default:"" doc:"Relative path to browse (empty for root)"`
+}
+
+type BrowseProjectFilesOutput struct {
+	Body base.ApiResponse[project.BrowseFilesResponse]
+}
+
+type ReadProjectFileInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Path          string `query:"path" doc:"Relative file path"`
+}
+
+type ReadProjectFileOutput struct {
+	Body base.ApiResponse[project.ReadFileResponse]
+}
+
+type WriteProjectFileInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Body          project.WriteFileRequest
+}
+
+type WriteProjectFileOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
+type CreateProjectDirectoryInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Body          project.CreateDirectoryRequest
+}
+
+type CreateProjectDirectoryOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
+type DeleteProjectFileInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Body          project.DeleteFileRequest
+}
+
+type DeleteProjectFileOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
+type CopyProjectFileInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Body          project.CopyFileRequest
+}
+
+type CopyProjectFileOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
+type MoveProjectFileInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+	Body          project.MoveFileRequest
+}
+
+type MoveProjectFileOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
 // RegisterProjects registers project management routes using Huma.
 // Note: WebSocket and streaming endpoints remain as Gin handlers.
 func RegisterProjects(api huma.API, projectService *services.ProjectService) {
@@ -318,6 +388,97 @@ func RegisterProjects(api huma.API, projectService *services.ProjectService) {
 			{"ApiKeyAuth": {}},
 		},
 	}, h.PullProjectImages)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "browse-project-files",
+		Method:      http.MethodGet,
+		Path:        "/environments/{id}/projects/{projectId}/files",
+		Summary:     "Browse project files",
+		Description: "List files and directories in the project directory",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.BrowseProjectFiles)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "read-project-file",
+		Method:      http.MethodGet,
+		Path:        "/environments/{id}/projects/{projectId}/files/read",
+		Summary:     "Read project file",
+		Description: "Read the content of a file in the project directory",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.ReadProjectFile)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "write-project-file",
+		Method:      http.MethodPost,
+		Path:        "/environments/{id}/projects/{projectId}/files/write",
+		Summary:     "Write project file",
+		Description: "Write content to a file in the project directory",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.WriteProjectFile)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "create-project-directory",
+		Method:      http.MethodPost,
+		Path:        "/environments/{id}/projects/{projectId}/files/mkdir",
+		Summary:     "Create directory",
+		Description: "Create a new directory in the project",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.CreateProjectDirectory)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "delete-project-file",
+		Method:      http.MethodDelete,
+		Path:        "/environments/{id}/projects/{projectId}/files",
+		Summary:     "Delete file or directory",
+		Description: "Delete a file or directory in the project",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.DeleteProjectFile)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "copy-project-file",
+		Method:      http.MethodPost,
+		Path:        "/environments/{id}/projects/{projectId}/files/copy",
+		Summary:     "Copy file or directory",
+		Description: "Copy a file or directory within the project",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.CopyProjectFile)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "move-project-file",
+		Method:      http.MethodPost,
+		Path:        "/environments/{id}/projects/{projectId}/files/move",
+		Summary:     "Move/rename file or directory",
+		Description: "Move or rename a file or directory within the project",
+		Tags:        []string{"Projects", "Files"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.MoveProjectFile)
 }
 
 // ListProjects returns a paginated list of projects.
@@ -699,6 +860,169 @@ func (h *ProjectHandler) PullProjectImages(ctx context.Context, input *PullProje
 			}
 
 			_, _ = writer.Write([]byte(`{"status":"complete"}` + "\n"))
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) BrowseProjectFiles(ctx context.Context, input *BrowseProjectFilesInput) (*BrowseProjectFilesOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	response, err := h.projectService.BrowseProjectFiles(ctx, input.ProjectID, input.Path)
+	if err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to browse files: %s", err.Error()))
+	}
+
+	return &BrowseProjectFilesOutput{
+		Body: base.ApiResponse[project.BrowseFilesResponse]{
+			Success: true,
+			Data:    response,
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) ReadProjectFile(ctx context.Context, input *ReadProjectFileInput) (*ReadProjectFileOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if input.Path == "" {
+		return nil, huma.Error400BadRequest("file path is required")
+	}
+
+	response, err := h.projectService.ReadProjectFile(ctx, input.ProjectID, input.Path)
+	if err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to read file: %s", err.Error()))
+	}
+
+	return &ReadProjectFileOutput{
+		Body: base.ApiResponse[project.ReadFileResponse]{
+			Success: true,
+			Data:    response,
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) WriteProjectFile(ctx context.Context, input *WriteProjectFileInput) (*WriteProjectFileOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if err := h.projectService.WriteProjectFile(ctx, input.ProjectID, input.Body.Path, input.Body.Content, input.Body.CreateDirectories); err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to write file: %s", err.Error()))
+	}
+
+	return &WriteProjectFileOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "File written successfully",
+			},
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) CreateProjectDirectory(ctx context.Context, input *CreateProjectDirectoryInput) (*CreateProjectDirectoryOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if err := h.projectService.CreateProjectDirectory(ctx, input.ProjectID, input.Body.Path); err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to create directory: %s", err.Error()))
+	}
+
+	return &CreateProjectDirectoryOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Directory created successfully",
+			},
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) DeleteProjectFile(ctx context.Context, input *DeleteProjectFileInput) (*DeleteProjectFileOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if err := h.projectService.DeleteProjectFile(ctx, input.ProjectID, input.Body.Path, input.Body.Recursive); err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to delete: %s", err.Error()))
+	}
+
+	return &DeleteProjectFileOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Deleted successfully",
+			},
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) CopyProjectFile(ctx context.Context, input *CopyProjectFileInput) (*CopyProjectFileOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if err := h.projectService.CopyProjectFile(ctx, input.ProjectID, input.Body.SourcePath, input.Body.DestinationPath); err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to copy: %s", err.Error()))
+	}
+
+	return &CopyProjectFileOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Copied successfully",
+			},
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) MoveProjectFile(ctx context.Context, input *MoveProjectFileInput) (*MoveProjectFileOutput, error) {
+	if h.projectService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("project ID is required")
+	}
+
+	if err := h.projectService.MoveProjectFile(ctx, input.ProjectID, input.Body.SourcePath, input.Body.DestinationPath); err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("failed to move: %s", err.Error()))
+	}
+
+	return &MoveProjectFileOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Moved successfully",
+			},
 		},
 	}, nil
 }

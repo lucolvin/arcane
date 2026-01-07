@@ -2,7 +2,7 @@
 	import type { Project } from '$lib/types/project.type';
 	import ArcaneTable from '$lib/components/arcane-table/arcane-table.svelte';
 	import { ArcaneButton } from '$lib/components/arcane-button/index.js';
-	import { EllipsisIcon, EditIcon, StartIcon, RestartIcon, StopIcon, TrashIcon } from '$lib/icons';
+	import { EllipsisIcon, EditIcon, StartIcon, RestartIcon, StopIcon, TrashIcon, FolderOpenIcon } from '$lib/icons';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
@@ -19,7 +19,7 @@
 	import { UniversalMobileCard } from '$lib/components/arcane-table';
 	import { m } from '$lib/paraglide/messages';
 	import { projectService } from '$lib/services/project-service';
-	import { FolderOpenIcon, LayersIcon, CalendarIcon } from '$lib/icons';
+	import { LayersIcon, CalendarIcon } from '$lib/icons';
 
 	let {
 		projects = $bindable(),
@@ -240,6 +240,11 @@
 				<DropdownMenu.Item onclick={() => goto(`/projects/${item.id}`)} disabled={isAnyLoading}>
 					<EditIcon class="size-4" />
 					{m.common_edit()}
+				</DropdownMenu.Item>
+
+				<DropdownMenu.Item onclick={() => goto(`/projects/${item.id}?tab=files`)} disabled={isAnyLoading}>
+					<FolderOpenIcon class="size-4" />
+					Browse Files
 				</DropdownMenu.Item>
 
 				{#if item.status !== 'running'}

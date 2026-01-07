@@ -13,6 +13,26 @@ import (
 )
 
 func GetProjectsDirectory(ctx context.Context, projectsDir string) (string, error) {
+	// Prefer host-absolute projects directory in development to avoid Docker Desktop mount issues on macOS
+	// If HOST_PROJECT_ROOT is provided (from compose.dev) we build the absolute host path
+	// e.g. /Users/you/Dev/arcane/backend/data/projects
+	if os.Getenv("ENVIRONMENT") == "development" {
+		if hostRoot := os.Getenv("HOST_PROJECT_ROOT"); hostRoot != "" {
+			hostProjects := filepath.Join(hostRoot, "backend", "data", "projects")
+			// If the path exists or can be created, use it
+			if _, herr := os.Stat(hostProjects); os.IsNotExist(herr) {
+				if mkErr := os.MkdirAll(hostProjects, common.DirPerm); mkErr == nil {
+					slog.InfoContext(ctx, "Created host projects directory", "path", hostProjects)
+					return hostProjects, nil
+				}
+			} else if herr == nil {
+				return hostProjects, nil
+			}
+			// Fall through to default if host path unusable
+			slog.DebugContext(ctx, "Host projects directory not usable, falling back", "path", hostProjects)
+		}
+	}
+
 	projectsDirectory := projectsDir
 	if projectsDirectory == "" {
 		projectsDirectory = "data/projects"

@@ -104,3 +104,6 @@ export { default as VolumeUsedIcon } from 'virtual:icons/clarity/hard-disk-solid
 export { default as OpenIdIcon } from 'virtual:icons/simple-icons/openid';
 export { default as LoginIcon } from 'virtual:icons/solar/login-3-linear';
 export { default as JobsIcon } from 'virtual:icons/solar/alarm-linear';
+export { default as PlusIcon } from 'virtual:icons/solar/add-circle-bold';
+export { default as FolderPlusIcon } from 'virtual:icons/solar/add-folder-linear';
+export { default as FolderIcon } from 'virtual:icons/solar/folder-linear';

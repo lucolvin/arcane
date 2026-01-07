@@ -4,7 +4,7 @@
 	import * as TreeView from '$lib/components/ui/tree-view/index.js';
 	import * as Card from '$lib/components/ui/card';
 	import { ArcaneButton } from '$lib/components/arcane-button/index.js';
-	import { ArrowLeftIcon, ProjectsIcon, LayersIcon, SettingsIcon, FileTextIcon } from '$lib/icons';
+	import { ArrowLeftIcon, ProjectsIcon, LayersIcon, SettingsIcon, FileTextIcon, FolderOpenIcon } from '$lib/icons';
 	import { type TabItem } from '$lib/components/tab-bar/index.js';
 	import TabbedPageLayout from '$lib/layouts/tabbed-page-layout.svelte';
 	import ActionButtons from '$lib/components/action-buttons.svelte';
@@ -12,6 +12,7 @@
 	import { getStatusVariant } from '$lib/utils/status.utils';
 	import { capitalizeFirstLetter } from '$lib/utils/string.utils';
 	import { invalidateAll } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { toast } from 'svelte-sonner';
 	import { tryCatch } from '$lib/utils/try-catch';
 	import { handleApiResultWithCallbacks } from '$lib/utils/api.util';
@@ -23,6 +24,7 @@
 	import ServicesGrid from '../components/ServicesGrid.svelte';
 	import CodePanel from '../components/CodePanel.svelte';
 	import ProjectsLogsPanel from '../components/ProjectLogsPanel.svelte';
+	import FileBrowser from '../components/FileBrowser.svelte';
 	import SwitchWithLabel from '$lib/components/form/labeled-switch.svelte';
 	import { untrack } from 'svelte';
 	import { projectService } from '$lib/services/project-service';
@@ -78,7 +80,7 @@
 
 	let autoScrollStackLogs = $state(true);
 
-	let selectedTab = $state<'services' | 'compose' | 'logs'>('compose');
+	let selectedTab = $state<'services' | 'compose' | 'files' | 'logs'>('compose');
 	let composeOpen = $state(true);
 	let envOpen = $state(true);
 	let includeFilesPanelStates = $state<Record<string, boolean>>({});
@@ -99,6 +101,11 @@
 			icon: SettingsIcon
 		},
 		{
+			value: 'files',
+			label: 'Files',
+			icon: FolderOpenIcon
+		},
+		{
 			value: 'logs',
 			label: m.compose_nav_logs(),
 			icon: FileTextIcon,
@@ -109,7 +116,7 @@
 	let nameInputRef = $state<HTMLInputElement | null>(null);
 
 	type ComposeUIPrefs = {
-		tab: 'services' | 'compose' | 'logs';
+		tab: 'services' | 'compose' | 'files' | 'logs';
 		composeOpen: boolean;
 		envOpen: boolean;
 		autoScroll: boolean;
@@ -137,7 +144,15 @@
 			syncTabs: false
 		});
 		const cur = prefs.current ?? {};
-		selectedTab = cur.tab ?? defaultComposeUIPrefs.tab;
+		
+		// Check for tab query parameter
+		const tabParam = $page.url.searchParams.get('tab');
+		if (tabParam && ['services', 'compose', 'files', 'logs'].includes(tabParam)) {
+			selectedTab = tabParam as 'services' | 'compose' | 'files' | 'logs';
+		} else {
+			selectedTab = cur.tab ?? defaultComposeUIPrefs.tab;
+		}
+		
 		composeOpen = cur.composeOpen ?? defaultComposeUIPrefs.composeOpen;
 		envOpen = cur.envOpen ?? defaultComposeUIPrefs.envOpen;
 		autoScrollStackLogs = cur.autoScroll ?? defaultComposeUIPrefs.autoScroll;
@@ -485,6 +500,10 @@
 						{/if}
 					</div>
 				</div>
+			</Tabs.Content>
+
+			<Tabs.Content value="files" class="h-full">
+				<FileBrowser projectId={project.id} />
 			</Tabs.Content>
 
 			<Tabs.Content value="logs" class="h-full">
